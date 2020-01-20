@@ -1,15 +1,17 @@
 import sys
 
 from PyQt5.QtCore import *
-from PyQt5.QtWidgets import QApplication, QTreeWidget, QTreeWidgetItem, QWidget, QVBoxLayout, QLineEdit, QHBoxLayout, QTabWidget, QTableWidget, QTableWidgetItem, QLabel, QPushButton, QStyle, QMainWindow, QAction, QFileDialog, qApp
+from PyQt5.QtWidgets import QApplication, QTreeWidget, QTreeWidgetItem, QWidget, QVBoxLayout, QLineEdit, QHBoxLayout, QTabWidget, QTableWidget, QTableWidgetItem, QLabel, QPushButton, QStyle, QMainWindow, QAction, QFileDialog, qApp, QMessageBox
 from PyQt5.QtGui import QIntValidator, QIcon
 
 from food_loader import *
 
 tree:QTreeWidget = 0
 
+
 def fl(v:float):
 	return "{:.2f}".format(v)
+
 
 class Meal(QWidget):
 	updated = pyqtSignal()
@@ -49,11 +51,15 @@ class Meal(QWidget):
 		e.accept()
 
 	def dropEvent(s, e):
-		s.table.insertRow(s.table.rowCount())
 		item = tree.selectedItems()[0]
 		name = item.text(0)
+		s.add_food(name, 100)
+
+	def add_food(s, name, amount):
+		s.table.insertRow(s.table.rowCount())
 		food = foods[name]
-		items = [QTableWidgetItem(name), QTableWidgetItem(fl(food["p"])), QTableWidgetItem(fl(food["f"])), QTableWidgetItem(fl(food["c"])), QTableWidgetItem(fl(food["cal"]))]
+		items = [QTableWidgetItem(name), QTableWidgetItem(fl(food["p"])), QTableWidgetItem(fl(food["f"])),
+				 QTableWidgetItem(fl(food["c"])), QTableWidgetItem(fl(food["cal"]))]
 		shift = 0
 		for i in range(len(items) + 1):
 			if i == 1:
@@ -61,7 +67,7 @@ class Meal(QWidget):
 				continue
 			items[i - shift].setFlags(Qt.ItemIsEnabled)
 			s.table.setItem(s.table.rowCount() - 1, i, items[i - shift])
-		edit_amount = QLineEdit("100")
+		edit_amount = QLineEdit(str(amount))
 		edit_amount.editingFinished.connect(s.update)
 		edit_amount.setValidator(QIntValidator(0, 10000000))
 		s.table.setCellWidget(s.table.rowCount() - 1, 1, edit_amount)
@@ -125,6 +131,11 @@ class Meal(QWidget):
 		parent.appendChild(el)
 		return el
 
+	def load_from_xml(s, el: minidom.Element):
+		for dish in el.getElementsByTagName("dish"):
+			name = dish.getAttribute("name")
+			amount = dish.getAttribute("amount")
+			s.add_food(name, amount)
 
 class DayWidget(QWidget):
 	def __init__(s):
@@ -166,6 +177,12 @@ class DayWidget(QWidget):
 		s.breakfast.save_to_xml(el, doc)
 		parent.appendChild(el)
 		return el
+
+	def load_from_xml(s, el: minidom.Element):
+		d = {a:b for (a,b) in map(lambda e:(e.getAttribute("name"), e), el.getElementsByTagName("meal"))}
+		s.lunch.load_from_xml(d["Lunch"])
+		s.dinner.load_from_xml(d["Dinner"])
+		s.breakfast.load_from_xml(d["Breakfast"])
 
 
 class main_widget(QWidget):
@@ -213,26 +230,60 @@ class main_widget(QWidget):
 					parent.setHidden(False)
 					parent.setExpanded(True)
 
+
 class main_window(QMainWindow):
 	def __init__(s):
 		super().__init__()
+		s.last_path = ""
 		m = s.menuBar()
 		s.mw = main_widget()
-		action_save = QAction("&Save as", s)
+		action_save_as = QAction("&Save as", s)
+		action_save_as.setShortcut('Ctrl+Shift+S')
+		action_save_as.triggered.connect(s.save_as)
+
+		action_save = QAction("&Save", s)
 		action_save.setShortcut('Ctrl+S')
 		action_save.triggered.connect(s.save)
+
+		action_open = QAction("&Open", s)
+		action_open.setShortcut('Ctrl+O')
+		action_open.triggered.connect(s.open)
+
 		file_menu = m.addMenu('&File')
+		file_menu.addAction(action_open)
 		file_menu.addAction(action_save)
+		file_menu.addAction(action_save_as)
+
 		action_exit = QAction('&Exit', s)
 		action_exit.setShortcut('Ctrl+Q')
 		action_exit.triggered.connect(qApp.quit)
+
 		file_menu.addAction(action_exit)
 		s.setCentralWidget(s.mw)
 
-	def save(s):
-		path = QFileDialog.getSaveFileName(s, "Save menu to", "", "Menu files (*.ffm)")[0]
+	def save_as(s):
+		path = QFileDialog.getSaveFileName(s, "Save menu to", "", "Menu files (*.ffm)", ".ffm", QFileDialog.DontConfirmOverwrite)[0]
 		if path is None or len(path) == 0:
 			return
+		if not path.endswith(".ffm"):
+			path += ".ffm"
+		if QFile(path).exists():
+			res = QMessageBox.question(s, "File exists", "File '" + path + "' exists. Overwrite?", QMessageBox.Yes | QMessageBox.No)
+			if res == QMessageBox.No:
+				return
+		s.do_save(path)
+
+	def save(s):
+		if len(s.last_path) == 0:
+			s.save_as()
+		else:
+			s.do_save(s.last_path)
+		return
+
+	def do_save(s, path):
+		if path is None or len(path) == 0:
+			return
+		s.last_path = path
 		file = open(path, "wb")
 		doc = minidom.Document()
 		menu_element = doc.createElement("menu")
@@ -243,6 +294,29 @@ class main_window(QMainWindow):
 		file.write(doc.toprettyxml().encode())
 		file.close()
 
+	def cleanup(s):
+		s.mw.dayTabs.clear()
+		while s.mw.tab.count():
+			s.mw.tab.removeTab(0)
+
+	def load_xml(s, path):
+		doc = minidom.parse(path)
+		root:minidom.Element = doc.documentElement
+		days = root.getElementsByTagName("day")
+		for d in days:
+			day = DayWidget()
+			n = d.getAttribute("name")
+			s.mw.dayTabs[n] = day
+			day.load_from_xml(d)
+			s.mw.tab.addTab(day, n)
+
+	def open(s):
+		path = QFileDialog.getOpenFileName(s, "Open menu from", "", "Menu files (*.ffm)", ".ffm")[0]
+		if path is None or len(path) == 0:
+			return
+		s.cleanup()
+		s.load_xml(path)
+
 
 def main():
 	load_foods()
@@ -251,5 +325,6 @@ def main():
 	window_main.resize(640, 480)
 	window_main.show()
 	sys.exit(app.exec_())
+
 
 main()
