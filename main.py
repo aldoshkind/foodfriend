@@ -1,26 +1,15 @@
 import sys
 
 from PyQt5.QtCore import *
-from PyQt5.QtWidgets import QApplication, QTreeWidget, QTreeWidgetItem, QWidget, QVBoxLayout, QLineEdit, QHBoxLayout, QTabWidget, QTableWidget, QTableWidgetItem, QLabel, QPushButton, QStyle, QMainWindow, QAction, QFileDialog
-from PyQt5.QtGui import QIntValidator
+from PyQt5.QtWidgets import QApplication, QTreeWidget, QTreeWidgetItem, QWidget, QVBoxLayout, QLineEdit, QHBoxLayout, QTabWidget, QTableWidget, QTableWidgetItem, QLabel, QPushButton, QStyle, QMainWindow, QAction, QFileDialog, qApp
+from PyQt5.QtGui import QIntValidator, QIcon
 
 from food_loader import *
 
 tree:QTreeWidget = 0
 
-def filter(str):
-	items = tree.findItems("*", Qt.MatchWrap | Qt.MatchWildcard | Qt.MatchRecursive)
-	for item in items:
-		text = item.text(0)
-		hidden = str not in text
-		item.setHidden(hidden)
-		item.setExpanded(False)
-		if hidden == False:
-			parent = item.parent()
-			if parent is not None:
-				parent.setHidden(False)
-				parent.setExpanded(True)
-
+def fl(v:float):
+	return "{:.2f}".format(v)
 
 class Meal(QWidget):
 	updated = pyqtSignal()
@@ -35,6 +24,7 @@ class Meal(QWidget):
 		s.setLayout(s.layout_main)
 		s.table = QTableWidget()
 		s.table.setColumnCount(7)
+		s.name = name
 		s.table.setHorizontalHeaderLabels(["Name", "Amount, g", "Protein", "Fat", "Carbohydrates", "KCalories", "Remove"])
 		s.table.verticalHeader().setVisible(False)
 		s.layout_main.addWidget(QLabel(name))
@@ -63,7 +53,7 @@ class Meal(QWidget):
 		item = tree.selectedItems()[0]
 		name = item.text(0)
 		food = foods[name]
-		items = [QTableWidgetItem(name), QTableWidgetItem(str(food["p"])), QTableWidgetItem(str(food["f"])), QTableWidgetItem(str(food["c"])), QTableWidgetItem(str(food["cal"]))]
+		items = [QTableWidgetItem(name), QTableWidgetItem(fl(food["p"])), QTableWidgetItem(fl(food["f"])), QTableWidgetItem(fl(food["c"])), QTableWidgetItem(fl(food["cal"]))]
 		shift = 0
 		for i in range(len(items) + 1):
 			if i == 1:
@@ -106,15 +96,34 @@ class Meal(QWidget):
 			s.total_c += carb
 			s.total_f += fat
 			s.total_cal += cal
-			s.table.item(i, 2).setText(str(prot))
-			s.table.item(i, 3).setText(str(fat))
-			s.table.item(i, 4).setText(str(carb))
-			s.table.item(i, 5).setText(str(cal))
-		s.table.item(0, 2).setText(str(s.total_p))
-		s.table.item(0, 3).setText(str(s.total_f))
-		s.table.item(0, 4).setText(str(s.total_c))
-		s.table.item(0, 5).setText(str(s.total_cal))
+			s.table.item(i, 2).setText(fl(prot))
+			s.table.item(i, 3).setText(fl(fat))
+			s.table.item(i, 4).setText(fl(carb))
+			s.table.item(i, 5).setText(fl(cal))
+		s.table.item(0, 2).setText(fl(s.total_p))
+		s.table.item(0, 3).setText(fl(s.total_f))
+		s.table.item(0, 4).setText(fl(s.total_c))
+		s.table.item(0, 5).setText(fl(s.total_cal))
 		s.updated.emit()
+
+	def save_to_xml(s, parent: minidom.Element, doc: minidom.Document):
+		el = doc.createElement("meal")
+		el.setAttribute("name", s.name)
+		el.setAttribute("p", fl(s.total_p))
+		el.setAttribute("f", fl(s.total_f))
+		el.setAttribute("c", fl(s.total_c))
+		el.setAttribute("cal", fl(s.total_cal))
+		for i in range(1, s.table.rowCount()):
+			dish = doc.createElement("dish")
+			dish.setAttribute("name", s.table.item(i, 0).text())
+			dish.setAttribute("amount", s.table.cellWidget(i, 1).text())
+			dish.setAttribute("p", s.table.item(i, 2).text())
+			dish.setAttribute("f", s.table.item(i, 3).text())
+			dish.setAttribute("c", s.table.item(i, 4).text())
+			dish.setAttribute("cal", s.table.item(i, 5).text())
+			el.appendChild(dish)
+		parent.appendChild(el)
+		return el
 
 
 class DayWidget(QWidget):
@@ -145,76 +154,102 @@ class DayWidget(QWidget):
 		total_c = s.lunch.total_c + s.dinner.total_c + s.breakfast.total_c
 		total_f = s.lunch.total_f + s.dinner.total_f + s.breakfast.total_f
 		total_cal = s.lunch.total_cal + s.dinner.total_cal + s.breakfast.total_cal
-		s.label_carb.setText(str(total_c))
-		s.label_cal.setText(str(total_cal))
-		s.label_fat.setText(str(total_f))
-		s.label_prot.setText(str(total_p))
+		s.label_carb.setText(fl(total_c))
+		s.label_cal.setText(fl(total_cal))
+		s.label_fat.setText(fl(total_f))
+		s.label_prot.setText(fl(total_p))
 
-	def save_to_xml(s, parent: minidom.Element):
-		el = minidom.Element()
-		el.tagName = "day"
+	def save_to_xml(s, parent: minidom.Element, doc: minidom.Document):
+		el = doc.createElement("day")
+		s.lunch.save_to_xml(el, doc)
+		s.dinner.save_to_xml(el, doc)
+		s.breakfast.save_to_xml(el, doc)
 		parent.appendChild(el)
 		return el
 
-tab: QTabWidget
+
+class main_widget(QWidget):
+	def __init__(s):
+		super().__init__()
+		layout_main = QHBoxLayout()
+		layout_tree = QVBoxLayout()
+		layout_main.addLayout(layout_tree, 3)
+		edit_filter = QLineEdit()
+		global tree
+		tree = QTreeWidget()
+		s.tab = QTabWidget()
+		days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+		s.dayTabs = {}
+		for d in days:
+			dtab = DayWidget()
+			s.dayTabs[d] = dtab
+			s.tab.addTab(dtab, d)
+		layout_main.addWidget(s.tab, 7)
+		layout_tree.addWidget(edit_filter)
+		layout_tree.addWidget(tree)
+		tree.setHeaderHidden(True)
+		tree.setDragDropMode(QTreeWidget.DragOnly)
+		s.setLayout(layout_main)
+		for c in categories.values():
+			parent = QTreeWidgetItem(tree)
+			parent.setText(0, c["name"])
+			parent.setFlags(Qt.ItemIsEnabled)
+			for f in c["food"]:
+				child = QTreeWidgetItem(parent)
+				child.setFlags(Qt.ItemIsDragEnabled | Qt.ItemIsDropEnabled | Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+				child.setText(0, f["name"])
+		edit_filter.textChanged.connect(s.filter)
+
+	def filter(s, st):
+		items = tree.findItems("*", Qt.MatchWrap | Qt.MatchWildcard | Qt.MatchRecursive)
+		for item in items:
+			text = item.text(0)
+			hidden = st.lower() not in text.lower()
+			item.setHidden(hidden)
+			item.setExpanded(False)
+			if hidden == False:
+				parent = item.parent()
+				if parent is not None:
+					parent.setHidden(False)
+					parent.setExpanded(True)
 
 class main_window(QMainWindow):
-	def __init__(self):
+	def __init__(s):
 		super().__init__()
-		m = self.menuBar()
-		action_save = QAction("Save")
-		action_save.triggered.connect(self.save)
-		m.addAction(action_save)
+		m = s.menuBar()
+		s.mw = main_widget()
+		action_save = QAction("&Save as", s)
+		action_save.setShortcut('Ctrl+S')
+		action_save.triggered.connect(s.save)
+		file_menu = m.addMenu('&File')
+		file_menu.addAction(action_save)
+		action_exit = QAction('&Exit', s)
+		action_exit.setShortcut('Ctrl+Q')
+		action_exit.triggered.connect(qApp.quit)
+		file_menu.addAction(action_exit)
+		s.setCentralWidget(s.mw)
 
 	def save(s):
-		path = QFileDialog.getSaveFileName(s, "Save menu to", "", "Menu files (*.ffm)")
+		path = QFileDialog.getSaveFileName(s, "Save menu to", "", "Menu files (*.ffm)")[0]
 		if path is None or len(path) == 0:
 			return
 		file = open(path, "wb")
 		doc = minidom.Document()
-		doc.createElement("menu")
-		for t in tab.children():
-			t.save_to_xml(doc)
+		menu_element = doc.createElement("menu")
+		doc.appendChild(menu_element)
+		for name, t in s.mw.dayTabs.items():
+			dayel = t.save_to_xml(menu_element, doc)
+			dayel.setAttribute("name", name)
 		file.write(doc.toprettyxml().encode())
 		file.close()
+
 
 def main():
 	load_foods()
 	app = QApplication (sys.argv)
-
-	widget_main = main_window()
-	layout_main = QHBoxLayout()
-	layout_tree = QVBoxLayout()
-	layout_main.addLayout(layout_tree, 3)
-	edit_filter = QLineEdit()
-	global tree
-	tree = QTreeWidget()
-	tab = QTabWidget()
-	tab.addTab(DayWidget(), "Mon")
-	tab.addTab(DayWidget(), "Tue")
-	tab.addTab(DayWidget(), "Wed")
-	tab.addTab(DayWidget(), "Thu")
-	tab.addTab(DayWidget(), "Fri")
-	tab.addTab(DayWidget(), "Sat")
-	tab.addTab(DayWidget(), "Sun")
-	widget_main.setLayout(layout_main)
-	layout_main.addWidget(tab, 7)
-	layout_tree.addWidget(edit_filter)
-	layout_tree.addWidget(tree)
-	tree.setHeaderHidden(True)
-	tree.setDragDropMode(QTreeWidget.DragOnly)
-	for c in categories.values():
-		parent = QTreeWidgetItem(tree)
-		parent.setText(0, c["name"])
-		parent.setFlags(Qt.ItemIsEnabled)
-		for f in c["food"]:
-			child = QTreeWidgetItem(parent)
-			child.setFlags(Qt.ItemIsDragEnabled | Qt.ItemIsDropEnabled | Qt.ItemIsEnabled | Qt.ItemIsSelectable)
-			child.setText(0, f["name"])
-
-	edit_filter.textChanged.connect(filter)
-	widget_main.resize(640, 480)
-	widget_main.show()
+	window_main = main_window()
+	window_main.resize(640, 480)
+	window_main.show()
 	sys.exit(app.exec_())
 
 main()
