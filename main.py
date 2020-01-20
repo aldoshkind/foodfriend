@@ -274,7 +274,7 @@ class main_window(QMainWindow):
 		s.do_save(path)
 
 	def save(s):
-		if len(s.last_path) == 0:
+		if len(s.last_path) == 0 or s.last_path == ".ffm":
 			s.save_as()
 		else:
 			s.do_save(s.last_path)
